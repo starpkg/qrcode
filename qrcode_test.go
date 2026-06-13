@@ -6,6 +6,7 @@ package qrcode
 //   - the four output forms
 //   - hand-written BMP header correctness
 //   - error paths
+//   - output-size cap (memory-amplification guard)
 
 import (
 	"encoding/binary"
@@ -130,4 +131,83 @@ func TestErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- output-size cap (memory-amplification guard) ----------------------------
+
+// TestOutputSizeCap covers the M5 guard: an unbounded scale/module_size/quiet_zone
+// could amplify a tiny QR into a multi-hundred-MB allocation. The guard projects
+// the output size and rejects before allocating; a normal render still works.
+func TestOutputSizeCap(t *testing.T) {
+	// A huge scale must error cleanly — no ~840 MB allocation, no panic.
+	// At the default 16 MiB cap, bmp(scale=2000) projects far over the limit
+	// and is rejected before encodeBMP is ever reached.
+	// bmp/scale and the ⟨form⟩/quiet_zone levers are the amplifiers. (SVG output
+	// scales with the module *count*, so a huge quiet_zone — not module_size —
+	// is its amplification vector.)
+	huge := []string{
+		`load("qrcode","encode"); encode("https://example.com").bmp(scale=2000)`,
+		`load("qrcode","encode"); encode("https://example.com").svg(quiet_zone=100000)`,
+		`load("qrcode","encode"); encode("https://example.com").pure_ascii(quiet_zone=100000)`,
+		`load("qrcode","encode"); encode("https://example.com").ascii(quiet_zone=100000)`,
+	}
+	for _, script := range huge {
+		err := func() (e error) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("render panicked instead of erroring: %v", r)
+				}
+			}()
+			_, e = run(t, script)
+			return
+		}()
+		if err == nil {
+			t.Errorf("expected an output-size error, got nil for: %s", script)
+			continue
+		}
+		if !strings.Contains(err.Error(), "max_output_bytes") {
+			t.Errorf("error %q does not mention the cap (max_output_bytes); script: %s", err, script)
+		}
+	}
+
+	// A normal render still succeeds and returns real bytes.
+	res, err := run(t, `
+load("qrcode", "encode")
+b = encode("https://example.com").bmp(scale=4)
+n = len(b)
+`)
+	if err != nil {
+		t.Fatalf("normal render errored: %v", err)
+	}
+	if n, _ := res["n"].(int64); n < 62 {
+		t.Errorf("normal bmp length = %v, want a real image", res["n"])
+	}
+}
+
+// TestOutputSizeCapConfigurable verifies the cap is tunable via QRCODE_MAX_OUTPUT_BYTES:
+// a tiny cap rejects an otherwise-fine render, and a generous cap admits a render
+// the default would have refused.
+func TestOutputSizeCapConfigurable(t *testing.T) {
+	t.Run("tiny cap rejects normal render", func(t *testing.T) {
+		t.Setenv("QRCODE_MAX_OUTPUT_BYTES", "16")
+		_, err := run(t, `load("qrcode","encode"); encode("https://example.com").bmp(scale=4)`)
+		if err == nil || !strings.Contains(err.Error(), "max_output_bytes") {
+			t.Errorf("tiny cap: want output-size error, got %v", err)
+		}
+	})
+	t.Run("generous cap admits a larger render", func(t *testing.T) {
+		// scale=400 on a ~33-module QR projects well past 16 MiB but under 1 GiB.
+		t.Setenv("QRCODE_MAX_OUTPUT_BYTES", "1073741824") // 1 GiB
+		res, err := run(t, `
+load("qrcode", "encode")
+b = encode("hi").bmp(scale=400)
+n = len(b)
+`)
+		if err != nil {
+			t.Fatalf("generous cap: unexpected error: %v", err)
+		}
+		if n, _ := res["n"].(int64); n < 62 {
+			t.Errorf("generous cap: bmp length = %v, want a real image", res["n"])
+		}
+	})
 }

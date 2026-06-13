@@ -20,13 +20,18 @@ import (
 const ModuleName = "qrcode"
 
 const (
-	configKeyECLevel   = "ec_level"
-	configKeyQuietZone = "quiet_zone"
+	configKeyECLevel        = "ec_level"
+	configKeyQuietZone      = "quiet_zone"
+	configKeyMaxOutputBytes = "max_output_bytes"
 )
 
 const (
 	defaultECLevel   = "M"
 	defaultQuietZone = 4
+	// defaultMaxOutputBytes caps the projected size of any single rendered
+	// output, guarding against memory-amplification: an unbounded scale or
+	// module_size can turn a tiny QR into a multi-hundred-MB allocation.
+	defaultMaxOutputBytes = 16 << 20 // 16 MiB
 )
 
 var none = starlark.None
@@ -42,6 +47,7 @@ func NewModule() *Module {
 	cm, _ := base.NewConfigurableModuleWithConfigOptions(
 		genConfigOption(configKeyECLevel, "Default error-correction level (L, M, Q, H)", defaultECLevel),
 		genConfigOption(configKeyQuietZone, "Default quiet-zone width in modules", defaultQuietZone),
+		genConfigOption(configKeyMaxOutputBytes, "Maximum projected size of a single rendered output in bytes", defaultMaxOutputBytes),
 	)
 	return &Module{cfgMod: cm, ext: cm.Extend()}
 }
@@ -112,7 +118,17 @@ func (m *Module) encode(thread *starlark.Thread, b *starlark.Builtin, args starl
 		}
 		matrix[y] = row
 	}
-	return &qrValue{matrix: matrix, quietZone: quietZone}, nil
+	return &qrValue{matrix: matrix, quietZone: quietZone, maxOutput: m.maxOutput()}, nil
+}
+
+// maxOutput returns the configured per-render output cap, falling back to the
+// default when unset or non-positive (a non-positive value would disable the
+// guard, which the cap exists to prevent).
+func (m *Module) maxOutput() int {
+	if v := m.ext.GetInt(configKeyMaxOutputBytes); v > 0 {
+		return v
+	}
+	return defaultMaxOutputBytes
 }
 
 func upper(s string) string {

@@ -60,5 +60,11 @@ scannability.
 |--------|------|---------|-------------|
 | `ec_level` | `string` | `"M"` | Default error-correction level (L/M/Q/H) |
 | `quiet_zone` | `int` | `4` | Default quiet-zone width in modules |
+| `max_output_bytes` | `int` | `16777216` | Maximum projected size of a single rendered output (16 MiB); guards against memory amplification |
 
-Settable via `QRCODE_EC_LEVEL` / `QRCODE_QUIET_ZONE`.
+Settable via `QRCODE_EC_LEVEL` / `QRCODE_QUIET_ZONE` / `QRCODE_MAX_OUTPUT_BYTES`.
+
+Each render projects its output size from the padded dimension and per-cell cost
+and is rejected with a clean error before allocating if it would exceed
+`max_output_bytes` — so an unbounded `scale`/`module_size`/`quiet_zone` cannot
+amplify a tiny QR into a multi-hundred-MB allocation.

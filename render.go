@@ -3,16 +3,19 @@ package qrcode
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strings"
 
 	"go.starlark.net/starlark"
 )
 
 // qrValue is an encoded QR returned by encode(): a module matrix plus the
-// default quiet-zone width, rendered four ways.
+// default quiet-zone width, rendered four ways. maxOutput caps the projected
+// size of any single render to guard against memory-amplification.
 type qrValue struct {
 	matrix    [][]bool
 	quietZone int
+	maxOutput int
 }
 
 var (
@@ -62,6 +65,36 @@ func (q *qrValue) padded(qz int) [][]bool {
 	return g
 }
 
+// checkOutputSize rejects a render whose projected output size would exceed the
+// configured cap, before any large buffer is allocated. projected is computed
+// in int64 by the caller via mulSat (saturating) so a huge scale/module_size
+// can neither overflow int nor wrap negative. This turns a memory-amplification
+// DoS (e.g. bmp(scale=2000) ≈ 840 MB) into a clean error instead of an OOM.
+func (q *qrValue) checkOutputSize(b *starlark.Builtin, projected int64) error {
+	limit := int64(q.maxOutput)
+	if limit <= 0 {
+		limit = defaultMaxOutputBytes
+	}
+	if projected > limit {
+		return fmt.Errorf("%s: projected output of %d bytes exceeds the %d-byte limit (max_output_bytes); reduce scale/module_size/quiet_zone", b.Name(), projected, limit)
+	}
+	return nil
+}
+
+// mulSat multiplies two non-negative int64s, saturating at math.MaxInt64 on
+// overflow so projected-size arithmetic stays monotonic (a larger input never
+// wraps to a smaller, guard-bypassing value).
+func mulSat(a, b int64) int64 {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	p := a * b
+	if p/b != a || p < 0 {
+		return math.MaxInt64
+	}
+	return p
+}
+
 func (q *qrValue) quietArg(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple, extra ...interface{}) (int, error) {
 	qz := q.quietZone
 	pairs := append([]interface{}{"quiet_zone?", &qz}, extra...)
@@ -80,6 +113,12 @@ func (q *qrValue) quietArg(b *starlark.Builtin, args starlark.Tuple, kwargs []st
 func (q *qrValue) ascii(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	qz, err := q.quietArg(b, args, kwargs)
 	if err != nil {
+		return none, err
+	}
+	dim := int64(len(q.matrix) + 2*qz)
+	// Half-block: ⌈dim/2⌉ lines, each dim 3-byte block runes plus a newline.
+	lines := (dim + 1) / 2
+	if err := q.checkOutputSize(b, mulSat(lines, mulSat(dim, 3)+1)); err != nil {
 		return none, err
 	}
 	g := q.padded(qz)
@@ -117,6 +156,15 @@ func (q *qrValue) pureASCII(thread *starlark.Thread, b *starlark.Builtin, args s
 	if err != nil {
 		return none, err
 	}
+	dim := int64(len(q.matrix) + 2*qz)
+	cell := int64(len(on))
+	if len(off) > len(on) {
+		cell = int64(len(off))
+	}
+	// dim lines, each dim cells of at most cell bytes plus a newline.
+	if err := q.checkOutputSize(b, mulSat(dim, mulSat(dim, cell)+1)); err != nil {
+		return none, err
+	}
 	g := q.padded(qz)
 	var sb strings.Builder
 	for y := 0; y < len(g); y++ {
@@ -143,6 +191,14 @@ func (q *qrValue) svg(thread *starlark.Thread, b *starlark.Builtin, args starlar
 	}
 	if moduleSize <= 0 {
 		return none, fmt.Errorf("%s: module_size must be positive", b.Name())
+	}
+	gm := int64(len(q.matrix) + 2*qz)
+	pixelDim := mulSat(gm, int64(moduleSize))
+	// Worst case: every module black ⇒ one <rect …/> each. The literal markup
+	// is ~52 bytes plus four coordinate fields whose width grows with pixelDim.
+	perRect := int64(52) + 4*int64(len(fmt.Sprintf("%d", pixelDim)))
+	if err := q.checkOutputSize(b, mulSat(mulSat(gm, gm), perRect)+128); err != nil {
+		return none, err
 	}
 	g := q.padded(qz)
 	dim := len(g) * moduleSize
@@ -172,6 +228,17 @@ func (q *qrValue) bmp(thread *starlark.Thread, b *starlark.Builtin, args starlar
 	}
 	if scale <= 0 {
 		return none, fmt.Errorf("%s: scale must be positive", b.Name())
+	}
+	// Worst case: rowBytes*pixelDim raster plus 62 header bytes. This is the
+	// largest of the four forms, so the guard matters most here.
+	pixelDim := mulSat(int64(len(q.matrix)+2*qz), int64(scale))
+	projected := int64(math.MaxInt64)
+	if pixelDim < math.MaxInt64 {
+		rowBytes := ((pixelDim + 31) / 32) * 4 // 1bpp rows padded to 4 bytes
+		projected = mulSat(rowBytes, pixelDim) + 62
+	}
+	if err := q.checkOutputSize(b, projected); err != nil {
+		return none, err
 	}
 	return starlark.Bytes(encodeBMP(q.padded(qz), scale)), nil
 }
