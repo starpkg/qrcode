@@ -103,13 +103,30 @@ func (m *Module) encode(thread *starlark.Thread, b *starlark.Builtin, args starl
 		return none, fmt.Errorf("%s: %w", b.Name(), err)
 	}
 
-	bc, err := qr.Encode(content.GoString(), ecl, qr.Unicode)
+	matrix, err := encodeMatrix(content.GoString(), ecl)
 	if err != nil {
-		return none, fmt.Errorf("qrcode: %w", err)
+		return none, err
+	}
+	return &qrValue{matrix: matrix, quietZone: quietZone, maxOutput: m.maxOutput()}, nil
+}
+
+// encodeMatrix runs the third-party QR encoder once and extracts the module
+// matrix, recovering any panic into a clean error (matching the yaml/toml/liquid
+// recover-around-3rd-party-parser pattern). boombuler returns errors today, so
+// this is defense-in-depth against a future panic from script-controlled input.
+func encodeMatrix(content string, ecl qr.ErrorCorrectionLevel) (matrix [][]bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			matrix, err = nil, fmt.Errorf("qrcode: encode panic: %v", r)
+		}
+	}()
+	bc, eerr := qr.Encode(content, ecl, qr.Unicode)
+	if eerr != nil {
+		return nil, fmt.Errorf("qrcode: %w", eerr)
 	}
 	bounds := bc.Bounds()
 	n := bounds.Dx()
-	matrix := make([][]bool, n)
+	matrix = make([][]bool, n)
 	for y := 0; y < n; y++ {
 		row := make([]bool, n)
 		for x := 0; x < n; x++ {
@@ -118,7 +135,7 @@ func (m *Module) encode(thread *starlark.Thread, b *starlark.Builtin, args starl
 		}
 		matrix[y] = row
 	}
-	return &qrValue{matrix: matrix, quietZone: quietZone, maxOutput: m.maxOutput()}, nil
+	return matrix, nil
 }
 
 // maxOutput returns the configured per-render output cap, falling back to the

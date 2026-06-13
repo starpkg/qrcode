@@ -6,6 +6,7 @@ package qrcode
 //   - the four output forms
 //   - hand-written BMP header correctness
 //   - error paths
+//   - encoder panic-recovery (defense-in-depth)
 //   - output-size cap (memory-amplification guard)
 
 import (
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/1set/starlet"
+	"github.com/boombuler/barcode/qr"
 )
 
 func run(t *testing.T, script string) (map[string]interface{}, error) {
@@ -130,6 +132,28 @@ func TestErrors(t *testing.T) {
 				t.Errorf("%s: expected error, got nil", name)
 			}
 		})
+	}
+}
+
+// --- encoder panic-recovery (defense-in-depth) -------------------------------
+
+// TestEncodeMatrixNoPanic confirms the recover-wrapped encoder still produces a
+// valid module matrix for normal input (the recover guard matches the
+// yaml/toml/liquid 3rd-party-parser pattern; boombuler returns errors today, so
+// the guard is defense-in-depth and must not perturb the happy path).
+func TestEncodeMatrixNoPanic(t *testing.T) {
+	matrix, err := encodeMatrix("https://example.com", qr.M)
+	if err != nil {
+		t.Fatalf("encodeMatrix: unexpected error: %v", err)
+	}
+	n := len(matrix)
+	if n < 21 || (n-21)%4 != 0 {
+		t.Fatalf("matrix dimension = %d, want a valid QR dimension (21 + 4k)", n)
+	}
+	for y, row := range matrix {
+		if len(row) != n {
+			t.Fatalf("row %d has width %d, want square matrix of %d", y, len(row), n)
+		}
 	}
 }
 
