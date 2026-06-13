@@ -62,7 +62,8 @@ func genConfigOption[T any](name, description string, defaultValue T) *base.Conf
 // LoadModule returns the Starlark module loader.
 func (m *Module) LoadModule() starlet.ModuleLoader {
 	funcs := starlark.StringDict{
-		"encode": starlark.NewBuiltin(ModuleName+".encode", m.encode),
+		"encode":   starlark.NewBuiltin(ModuleName+".encode", m.encode),
+		"template": starlark.NewBuiltin(ModuleName+".template", m.template),
 	}
 	return m.cfgMod.LoadModule(ModuleName, funcs)
 }
