@@ -1,6 +1,8 @@
 # 🔳 `qrcode` — QR codes for Starlark
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/starpkg/qrcode.svg)](https://pkg.go.dev/github.com/starpkg/qrcode)
+[![codecov](https://codecov.io/gh/starpkg/qrcode/graph/badge.svg)](https://codecov.io/gh/starpkg/qrcode)
+![binary footprint](https://img.shields.io/badge/binary_footprint-%2B0.2_MB-blue)
 
 Generate QR codes from Starlark in **four output forms** — half-block ASCII,
 pure ASCII, SVG, and a 1-bit BMP — built on
