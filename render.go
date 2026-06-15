@@ -23,6 +23,11 @@ var (
 	_ starlark.HasAttrs = (*qrValue)(nil)
 )
 
+// maxPlatformInt is the largest value a Go int holds on this platform
+// (math.MaxInt64 on 64-bit, math.MaxInt32 on 32-bit). A projected dimension
+// above it cannot be multiplied as a plain int without wrapping.
+const maxPlatformInt = int64(^uint(0) >> 1)
+
 func (q *qrValue) String() string        { return fmt.Sprintf("<qrcode.QR size=%d>", len(q.matrix)) }
 func (q *qrValue) Type() string          { return "qrcode.QR" }
 func (q *qrValue) Freeze()               {}
@@ -95,6 +100,28 @@ func mulSat(a, b int64) int64 {
 	return p
 }
 
+// addSat adds two non-negative int64s, saturating at math.MaxInt64 on overflow.
+// Projected-size formulas add a small header/newline constant to a (possibly
+// already saturated) mulSat result; without saturation that final "+ N" can
+// wrap a MaxInt64 product to a negative value that slips past checkOutputSize.
+func addSat(a, b int64) int64 {
+	s := a + b
+	if s < a || s < 0 {
+		return math.MaxInt64
+	}
+	return s
+}
+
+// paddedDim returns the padded matrix dimension (n + 2*qz) computed in
+// saturating int64 arithmetic. The matrix size and quiet zone are both
+// script-controlled; doing this in plain Go int (as `int64(n + 2*qz)`) lets a
+// huge quiet_zone overflow to a negative dimension that escapes the size guard
+// and crashes a later make(). Saturating keeps the projected size monotonic so
+// an over-large quiet_zone trips checkOutputSize cleanly instead.
+func paddedDim(n, qz int) int64 {
+	return addSat(int64(n), mulSat(2, int64(qz)))
+}
+
 func (q *qrValue) quietArg(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple, extra ...interface{}) (int, error) {
 	qz := q.quietZone
 	pairs := append([]interface{}{"quiet_zone?", &qz}, extra...)
@@ -115,10 +142,10 @@ func (q *qrValue) ascii(thread *starlark.Thread, b *starlark.Builtin, args starl
 	if err != nil {
 		return none, err
 	}
-	dim := int64(len(q.matrix) + 2*qz)
+	dim := paddedDim(len(q.matrix), qz)
 	// Half-block: ⌈dim/2⌉ lines, each dim 3-byte block runes plus a newline.
 	lines := (dim + 1) / 2
-	if err := q.checkOutputSize(b, mulSat(lines, mulSat(dim, 3)+1)); err != nil {
+	if err := q.checkOutputSize(b, mulSat(lines, addSat(mulSat(dim, 3), 1))); err != nil {
 		return none, err
 	}
 	g := q.padded(qz)
@@ -156,13 +183,13 @@ func (q *qrValue) pureASCII(thread *starlark.Thread, b *starlark.Builtin, args s
 	if err != nil {
 		return none, err
 	}
-	dim := int64(len(q.matrix) + 2*qz)
+	dim := paddedDim(len(q.matrix), qz)
 	cell := int64(len(on))
 	if len(off) > len(on) {
 		cell = int64(len(off))
 	}
 	// dim lines, each dim cells of at most cell bytes plus a newline.
-	if err := q.checkOutputSize(b, mulSat(dim, mulSat(dim, cell)+1)); err != nil {
+	if err := q.checkOutputSize(b, mulSat(dim, addSat(mulSat(dim, cell), 1))); err != nil {
 		return none, err
 	}
 	g := q.padded(qz)
@@ -192,13 +219,23 @@ func (q *qrValue) svg(thread *starlark.Thread, b *starlark.Builtin, args starlar
 	if moduleSize <= 0 {
 		return none, fmt.Errorf("%s: module_size must be positive", b.Name())
 	}
-	gm := int64(len(q.matrix) + 2*qz)
+	gm := paddedDim(len(q.matrix), qz)
 	pixelDim := mulSat(gm, int64(moduleSize))
 	// Worst case: every module black ⇒ one <rect …/> each. The literal markup
 	// is ~52 bytes plus four coordinate fields whose width grows with pixelDim.
-	perRect := int64(52) + 4*int64(len(fmt.Sprintf("%d", pixelDim)))
-	if err := q.checkOutputSize(b, mulSat(mulSat(gm, gm), perRect)+128); err != nil {
+	perRect := addSat(52, mulSat(4, int64(len(fmt.Sprintf("%d", pixelDim)))))
+	if err := q.checkOutputSize(b, addSat(mulSat(mulSat(gm, gm), perRect), 128)); err != nil {
 		return none, err
+	}
+	// SVG output is bounded by module *count*, so a huge module_size can pass
+	// the byte cap above yet overflow the int pixel coordinates below
+	// (dim = len(g)*moduleSize and x*moduleSize), silently emitting a corrupt
+	// image. If that product does not fit a platform int — i.e. mulSat had to
+	// saturate, or the value exceeds the platform int max — reject up front
+	// (invariant 4) rather than emit a broken QR. (gm is small once the byte cap
+	// passes, so this only fires for an absurd module_size.)
+	if pixelDim == math.MaxInt64 || pixelDim > maxPlatformInt {
+		return none, fmt.Errorf("%s: module_size %d too large for quiet_zone %d (pixel dimension overflow)", b.Name(), moduleSize, qz)
 	}
 	g := q.padded(qz)
 	dim := len(g) * moduleSize
@@ -231,11 +268,14 @@ func (q *qrValue) bmp(thread *starlark.Thread, b *starlark.Builtin, args starlar
 	}
 	// Worst case: rowBytes*pixelDim raster plus 62 header bytes. This is the
 	// largest of the four forms, so the guard matters most here.
-	pixelDim := mulSat(int64(len(q.matrix)+2*qz), int64(scale))
+	pixelDim := mulSat(paddedDim(len(q.matrix), qz), int64(scale))
 	projected := int64(math.MaxInt64)
+	// (pixelDim+31) and the trailing "+ 62" are done in saturating arithmetic so
+	// a near-MaxInt64 pixelDim cannot wrap the projected size negative and slip
+	// past the cap into encodeBMP's make([]byte, …) (which would then panic).
 	if pixelDim < math.MaxInt64 {
-		rowBytes := ((pixelDim + 31) / 32) * 4 // 1bpp rows padded to 4 bytes
-		projected = mulSat(rowBytes, pixelDim) + 62
+		rowBytes := (addSat(pixelDim, 31) / 32) * 4 // 1bpp rows padded to 4 bytes
+		projected = addSat(mulSat(rowBytes, pixelDim), 62)
 	}
 	if err := q.checkOutputSize(b, projected); err != nil {
 		return none, err
