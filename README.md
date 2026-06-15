@@ -6,6 +6,11 @@ Generate QR codes from Starlark in **four output forms** — half-block ASCII,
 pure ASCII, SVG, and a 1-bit BMP — built on
 [boombuler/barcode](https://github.com/boombuler/barcode).
 
+`qrcode` is a **starpkg** module: starpkg gives Starlark *support for necessary
+local operations + simple abstractions over common online services, for ease of
+use*. QR generation is a purely **local capability** — no network, no service
+credentials — so this module sits firmly on the local side of that line.
+
 **No `image/*` dependency.** The raster form is a hand-written 1-bit BMP emitted
 with `encoding/binary` (≈16 KiB), avoiding `image/png` (+249 KiB) and lossy JPEG
 (ringing artifacts hurt scannability). `encode()` runs the encoder once; the
@@ -37,16 +42,20 @@ qr = encode("https://example.com", level="M")
 print(qr.size)             # e.g. 25
 
 print(qr.ascii())          # scan it straight from the terminal
+print(qr.pure_ascii())     # ASCII-only (# and spaces), two chars per module
 svg = qr.svg(module_size=6)
 png_free_bytes = qr.bmp(scale=8)   # write to a .bmp file
 ```
 
 ## Format templates
 
-`template(kind, **params)` fills the standard wire format from simple parameters,
-so you don't hand-write `mailto:` / `WIFI:` / `MECARD:` strings. It returns a QR
-identical to `encode()`'s — `.ascii()` / `.pure_ascii()` / `.svg()` / `.bmp()` all
-apply, and it shares `level` / `quiet_zone` (pass them as keyword arguments too).
+`template(kind, level=<cfg>, quiet_zone=<cfg>, **params)` fills the standard wire
+format from simple parameters, so you don't hand-write `mailto:` / `WIFI:` /
+`MECARD:` strings. `kind` is the only positional argument; `level` and
+`quiet_zone` are reserved keywords (defaulting to the module config), and every
+other keyword is a template parameter. It returns a QR identical to `encode()`'s
+— `.ascii()` / `.pure_ascii()` / `.svg()` / `.bmp()` all apply, and it shares the
+same `level` / `quiet_zone` / `max_output_bytes` behaviour.
 
 ```python
 load("qrcode", "template")
