@@ -47,7 +47,11 @@ func NewModule() *Module {
 	cm, _ := base.NewConfigurableModuleWithConfigOptions(
 		genConfigOption(configKeyECLevel, "Default error-correction level (L, M, Q, H)", defaultECLevel),
 		genConfigOption(configKeyQuietZone, "Default quiet-zone width in modules", defaultQuietZone),
-		genConfigOption(configKeyMaxOutputBytes, "Maximum projected size of a single rendered output in bytes", defaultMaxOutputBytes),
+		// Host-only: the output-size cap is a memory-DoS guard the module
+		// enforces against the script, so a script must not be able to raise it.
+		// base generates no set_max_output_bytes builtin for a host-only option,
+		// and snapshots its env at construction so it can't be re-widened later.
+		genConfigOption(configKeyMaxOutputBytes, "Maximum projected size of a single rendered output in bytes", defaultMaxOutputBytes).SetHostOnly(true),
 	)
 	return &Module{cfgMod: cm, ext: cm.Extend()}
 }

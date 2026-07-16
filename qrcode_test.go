@@ -474,6 +474,29 @@ func TestMaxOutputFallback(t *testing.T) {
 	})
 }
 
+// TestMaxOutputBytesIsHostOnly is the regression guard for the capability-gate
+// fix: max_output_bytes is the module's own memory-DoS cap, so a script must not
+// be able to raise it. base emits no set_<name> builtin for a host-only option,
+// so loading set_max_output_bytes must fail — otherwise a script could
+// set_max_output_bytes(1<<62) and then bmp(scale=huge) to OOM the host.
+func TestMaxOutputBytesIsHostOnly(t *testing.T) {
+	// The setter is not exported to Starlark: base emits no set_<name> for a
+	// host-only option, so a script cannot raise the cap.
+	if _, err := run(t, `load("qrcode", "set_max_output_bytes")`); err == nil {
+		t.Fatal("set_max_output_bytes is loadable — the cap is script-widenable")
+	}
+	// The value is still readable (not secret), and the cap is genuinely live and
+	// unraisable: a huge render is rejected, with no setter available to lift it.
+	_, err := run(t, `
+load("qrcode", "encode", "get_max_output_bytes")
+_ = get_max_output_bytes()
+encode("hi").bmp(scale=4000)
+`)
+	if err == nil || !strings.Contains(err.Error(), "max_output_bytes") {
+		t.Fatalf("huge render should hit the (unraisable) cap, got %v", err)
+	}
+}
+
 // --- the QR Starlark value protocol ------------------------------------------
 
 func TestQRValueProtocol(t *testing.T) {

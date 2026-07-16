@@ -85,7 +85,8 @@ The module's options (`ec_level`, `quiet_zone`, `max_output_bytes`) are
 configured via environment variables (`QRCODE_EC_LEVEL` / `QRCODE_QUIET_ZONE` /
 `QRCODE_MAX_OUTPUT_BYTES`) or per-option `get_<key>` / `set_<key>` accessor
 builtins, and serve as defaults for `encode` / `template` and the render
-methods. See the
+methods. `max_output_bytes` is **host-only** — the memory-DoS cap has a getter
+but no `set_max_output_bytes`, so a script cannot raise it. See the
 [Configuration section of docs/API.md](docs/API.md#configuration) for the full
 option table, defaults, accessors, and the memory-amplification guard.
 
