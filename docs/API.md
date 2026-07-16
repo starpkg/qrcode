@@ -288,15 +288,18 @@ by `encode` / `template` (for `level` / `quiet_zone`) and by every render method
 (for the output-size cap and the inherited quiet zone) when the corresponding
 argument is not supplied.
 
-None of the `qrcode` options are secret, so every option exposes **both**
-`get_<key>` and `set_<key>`. (A secret option would expose only its `set_<key>`
-accessor — never a getter — but this module has none.)
+None of the `qrcode` options are secret, so their values are readable via
+`get_<key>`. `ec_level` and `quiet_zone` are also script-settable via `set_<key>`.
+`max_output_bytes` is **host-only**: it is the module's own memory-DoS guard, so a
+script must not be able to raise it — there is **no `set_max_output_bytes`
+builtin**, and its environment value is snapshotted at construction so it cannot
+be re-widened at runtime. Configure it host-side via `QRCODE_MAX_OUTPUT_BYTES`.
 
 | Option | Getter | Setter | Type | Env var | Default | Description |
 |--------|--------|--------|------|---------|---------|-------------|
 | `ec_level` | `get_ec_level` | `set_ec_level` | string | `QRCODE_EC_LEVEL` | `M` | Default error-correction level (`L`, `M`, `Q`, `H`) |
 | `quiet_zone` | `get_quiet_zone` | `set_quiet_zone` | int | `QRCODE_QUIET_ZONE` | `4` | Default quiet-zone width in modules |
-| `max_output_bytes` | `get_max_output_bytes` | `set_max_output_bytes` | int | `QRCODE_MAX_OUTPUT_BYTES` | `16777216` | Maximum projected size of a single rendered output in bytes (16 MiB); guards against memory amplification |
+| `max_output_bytes` | `get_max_output_bytes` | _(host-only, none)_ | int | `QRCODE_MAX_OUTPUT_BYTES` | `16777216` | Maximum projected size of a single rendered output in bytes (16 MiB); guards against memory amplification. Host-only — no script setter. |
 
 **Example:**
 
@@ -304,16 +307,16 @@ accessor — never a getter — but this module has none.)
 load(
     "qrcode",
     "encode",
-    # getters
+    # getters (all options are readable)
     "get_ec_level", "get_quiet_zone", "get_max_output_bytes",
-    # setters
-    "set_ec_level", "set_quiet_zone", "set_max_output_bytes",
+    # setters (max_output_bytes is host-only, so it has none)
+    "set_ec_level", "set_quiet_zone",
 )
 
 set_ec_level("H")
 set_quiet_zone(2)
 print(get_ec_level())          # "H"
-print(get_max_output_bytes())  # 16777216
+print(get_max_output_bytes())  # 16777216 (read-only from a script)
 
 qr = encode("https://example.com")  # encodes at level H, quiet zone 2
 print(qr.ascii())
@@ -326,6 +329,8 @@ hundreds of megabytes (for example `bmp(scale=2000)` ≈ 840 MB). Each render
 projects its output size from the padded dimension and per-cell cost and is
 rejected with a clean error **before** allocating if it would exceed
 `max_output_bytes` — so an unbounded lever cannot amplify a tiny QR into a
-multi-hundred-megabyte allocation. The cap is always active: a non-positive
-`max_output_bytes` falls back to the 16 MiB default rather than disabling the
-guard.
+multi-hundred-megabyte allocation. The cap is always active and **cannot be
+disabled or raised by a script**: `max_output_bytes` is host-only (no
+`set_max_output_bytes` builtin), and a non-positive host value falls back to the
+16 MiB default rather than disabling the guard. Only the host, via
+`QRCODE_MAX_OUTPUT_BYTES` at startup, can change it.
