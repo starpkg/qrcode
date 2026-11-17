@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`starpkg/qrcode` is an **L4 domain module** of the Star\* ecosystem: it exposes QR-code generation to Starlark scripts. A script imports the module, encodes a string (or fills a named wire-format template), and renders the resulting QR four ways — half-block ASCII, pure ASCII, SVG, and a hand-written 1-bit BMP.
+`starpkg/qrcode` is an **L3 domain module** of the Star\* ecosystem: it exposes QR-code generation to Starlark scripts. A script imports the module, encodes a string (or fills a named wire-format template), and renders the resulting QR four ways — half-block ASCII, pure ASCII, SVG, and a hand-written 1-bit BMP.
 
 starpkg's remit is *support for necessary **local** operations + simple abstractions over common **online** services, for ease of use*. QR generation is a purely **local capability**: it touches no network and needs no credentials, so this module lives entirely on the local side of that line — closer to `markdown`/`base32` than to `web`/`s3`/`email`.
 
@@ -73,7 +73,7 @@ Three layers must stay in sync (enforced by the doc standard, `plan/starpkg文�
 ## Release discipline
 
 - **Floor = go 1.19**, matching `go.mod`. A repo's floor only rises in its own isolated pin PR.
-- **Pins:** `go.starlark.net` on the ecosystem baseline (`ffb3f39…`), `1set/starlet v0.2.1`, `starpkg/base v0.1.0`, `boombuler/barcode v1.1.0`.
-- **CI matrix** = `[1.19.x, 1.25.x]` via the centralized reusable workflow in `1set/meta` (pinned to a commit SHA; bump the pin when meta's workflow changes).
+- **Pins:** `go.starlark.net` on the ecosystem baseline (`ffb3f39…`), `1set/starlet v0.2.5`, `starpkg/base v0.1.4`, `boombuler/barcode v1.1.0`.
+- **CI matrix** = `[1.19.x, 1.27.x]` via the centralized reusable workflow in `1set/meta` (pinned to a commit SHA; bump the pin when meta's workflow changes).
 - **Pin upgrade is the last PR of the series**, as one isolated change; never tag before it merges.
 - **Bumping the version, the go floor, or tagging are user-confirmed actions** — never tag autonomously; draft the title/notes and tag only after explicit approval; default to patch bumps; published tags are immutable in the module proxy.
